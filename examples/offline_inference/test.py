@@ -10,6 +10,8 @@ import sys
 # os.environ["NCCL_SOCKET_IFNAME"] = "^docker0,lo"  # Avoid docker0 and loopback interfaces
 # os.environ["NCCL_P2P_DISABLE"] = "1"  # Disable peer-to-peer operations
 # os.environ["NCCL_BLOCKING_WAIT"] = "1"  # Use blocking wait to improve stability
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
+os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
 
 def parse_arguments():
