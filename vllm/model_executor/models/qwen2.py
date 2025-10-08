@@ -31,6 +31,8 @@ from typing import Any, Optional, Union
 
 import torch
 from torch import nn
+import torch.nn.functional as F
+
 from transformers import Qwen2Config
 
 from vllm.attention import Attention, AttentionType
@@ -202,6 +204,32 @@ class Qwen2Attention(nn.Module):
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q, k = self.rotary_emb(positions, q, k)
         attn_output = self.attn(q, k, v)
+        
+        B, Lq, _ = q.shape
+        Dh = self.head_dim
+        H = self.num_heads
+
+        q_ = q.view(B, Lq, H, Dh).permute(0, 2, 1, 3).contiguous()   # [B, H, Lq, Dh]
+        k_ = k.view(B, -1, self.num_kv_heads, Dh).permute(0, 2, 1, 3).contiguous()
+        v_ = v.view(B, -1, self.num_kv_heads, Dh).permute(0, 2, 1, 3).contiguous()
+
+        # if MQA/GQA, repeat kv heads
+        if self.num_kv_heads < self.num_heads:
+            repeat_factor = self.num_heads // self.num_kv_heads
+            k_ = k_.repeat_interleave(repeat_factor, dim=1)
+            v_ = v_.repeat_interleave(repeat_factor, dim=1)
+
+        # decode = Lq == 1 case
+        scale = Dh ** -0.5
+        scores = torch.matmul(q_, k_.transpose(-1, -2)) * scale   # [B, H, 1, Lk]
+        probs = torch.softmax(scores, dim=-1)
+
+        # print some info
+        # for example top-5 keys per head for batch 0
+        topv, topi = torch.topk(probs.squeeze(-2), k=5, dim=-1)
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        print(f"[rank {rank}] manual attn top5 head0 idx:", topi[0, 0].tolist())
+        print(f"[rank {rank}] manual attn top5 head0 val:", topv[0, 0].tolist())
         output, _ = self.o_proj(attn_output)
         return output
 
